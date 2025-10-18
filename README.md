@@ -1,6 +1,6 @@
 # wperf - WebSocket 网络性能测试工具
 
-<img width="1024" height="576" alt="wperf_card" src="https://github.com/user-attachments/assets/452b8e4f-6605-4dbd-96bc-68755d656a32" />
+<img width="512" height="256" alt="wperf_card" src="https://github.com/user-attachments/assets/4108034c-9ff4-4a35-9169-4c30a3e10fea" />
 
 [English Version](README_en.md) | [![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
