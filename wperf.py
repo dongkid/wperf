@@ -15,6 +15,8 @@ import urllib.request
 import urllib.error
 import random
 
+__version__ = "0.2-251018-dev"
+
 
 async def get_geoip_info(ip):
     """获取IP地址的地理位置和ASN信息"""
@@ -992,6 +994,8 @@ Examples:
         epilog=epilog_text,
         formatter_class=argparse.RawTextHelpFormatter
     )
+
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {__version__}")
 
     # Mode selection
     mode_group = parser.add_argument_group('Mode', 'Choose one of the operating modes. Only one mode can be selected.')
