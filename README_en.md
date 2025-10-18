@@ -11,14 +11,24 @@ wperf is a WebSocket-based network performance testing tool with the core advant
 - 🌐 **NAT Traversal** - Based on WebSocket, it can easily traverse complex network environments and firewalls.
 - 🚀 **TCP Bandwidth Testing** - Measure upload and download bandwidth
 - 🔄 **Bidirectional Testing** - Perform upload and download tests simultaneously
+- ⏱️ **End-to-end Latency Test (Ping)** - Measure WebSocket-based round-trip time (RTT)
 - 📊 **UDP Simulation** - Measure jitter and packet loss
-- 📍 **Traceroute** - Support for local and reverse traceroute from server to client
+- 📍 **Traceroute** - Support for local, reverse, ICMP/UDP probes, and parallel probing
 - 🌍 **GeoIP Information** - Display ASN and country/region information for each hop in traceroute
 - 🔒 **Authentication** - Support token authentication
 - 📈 **Real-time Reporting** - Periodically output test progress
 - 🔢 **Parallel Connections** - Support multiple parallel connections to improve test accuracy
 - 📄 **JSON Output** - Support machine-readable JSON format output
 - ⚡ **High Performance Asynchronous** - Based on asyncio and websockets library
+- 🔬 **Network Behavior Simulation** - Simulate network characteristics like MTU, latency, jitter, packet loss, buffers, and Nagle's algorithm at the application layer.
+
+#### TODO List
+
+- [ ] Simultaneous testing against multiple servers with a unified comparison report.
+- [ ] More realistic simulation of packet loss and CWND (Congestion Window) behavior.
+- [ ] Performance simulation for different types of data traffic (e.g., video streaming, small interactive packets).
+- [ ] More and more...
+
 
 ## Installation
 
@@ -40,7 +50,7 @@ cd wperf
 pip install websockets
 ```
 
-Or use requirements.txt (if provided):
+Or use requirements.txt:
 ```bash
 pip install -r requirements.txt
 ```
@@ -95,6 +105,8 @@ wperf -c <server-ip> -t 10
 | `-J, --json` | Output results in JSON format | false |
 | `--udp` | Simulate UDP traffic and measure jitter/packet loss | false |
 | `-b, --bandwidth <mbps>` | Target bandwidth (Mbps, for UDP mode) | 1 |
+| `--ping` | **Client only**. Run an end-to-end latency test (ping). | false |
+| `--ping-count <n>` | Number of packets to send for the ping test. | 5 |
 
 #### Traceroute Parameters
 
@@ -106,6 +118,20 @@ wperf -c <server-ip> -t 10
 | `--reverse-traceroute` | **Client only**. Request the server to perform a reverse traceroute to the current client. Must be used with `-c`. | false |
 | `--tr-max-hops <n>` | Maximum number of hops for traceroute | 30 |
 | `--tr-timeout <sec>` | Timeout for each hop (seconds) | 1 |
+| `--tr-proto <proto>` | Protocol to use for traceroute probes (`udp` or `icmp`). | `udp` |
+| `--tr-parallel` | Run traceroute probes in parallel to speed up the process. | false |
+
+#### Network Behavior Simulation Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `--sim-mtu <size>` | Simulate Maximum Transmission Unit (MTU). | Not set |
+| `--sim-latency <ms>` | Simulate a fixed network latency. | 0 |
+| `--sim-jitter <ms>` | Simulate network jitter (latency variation). | 0 |
+| `--sim-loss <rate>` | Simulate packet loss rate (0-100). | 0 |
+| `--sim-tcp-nodelay` | Simulates disabling the Nagle algorithm (TCP_NODELAY=1), sending small packets immediately. | false |
+| `--sim-sndbuf <size>` | Simulates the size of the TCP send buffer (SO_SNDBUF). E.g., `128K`, `1M`. | System Default |
+| `--sim-rcvbuf <size>` | Simulates the size of the TCP receive buffer (SO_RCVBUF). | System Default |
 
 ### Usage Examples
 
@@ -211,7 +237,7 @@ Trace the network path to `google.com`. This mode runs independently and does no
 
 ```bash
 # Requires administrator/root privileges
-sudo wperf --traceroute google.com
+sudo wperf --traceroute google.com --tr-proto icmp --tr-parallel
 ```
 
 Example output:
@@ -224,7 +250,26 @@ traceroute to google.com (142.250.199.14), 30 hops max
 12 [US, AS15169 GOOGLE]   142.250.199.14 (142.250.199.14) 15.432 ms
 ```
 
-#### 11. Reverse Traceroute (Server to Client)
+#### 11. End-to-end Latency Test (Ping)
+
+Measure the round-trip latency between the client and server.
+
+```bash
+# Client
+wperf -c 192.168.1.100 --ping --ping-count 10
+```
+Example output:
+```
+Pinging 192.168.1.100:8765...
+seq=0, rtt=12.34 ms
+seq=1, rtt=11.98 ms
+...
+--- statistics ---
+10 packets transmitted, 10 received, 0% packet loss
+rtt min/avg/max = 11.98/12.15/12.45 ms
+```
+
+#### 12. Reverse Traceroute (Server to Client)
 
 Diagnose the network path from server to client. The client connects to the server and initiates the request.
 
@@ -233,6 +278,22 @@ Diagnose the network path from server to client. The client connects to the serv
 sudo wperf -c 192.168.1.100 --reverse-traceroute
 ```
 The server will execute traceroute to the client's public IP and stream the results back to the client in real-time for display.
+
+#### 13. Using Network Behavior Simulation
+
+```bash
+# Test with a small simulated send buffer and disabled Nagle algorithm
+wperf -c <server-ip> -t 10 --sim-sndbuf 128K --sim-tcp-nodelay
+```
+
+#### 14. Comprehensive Network Simulation Example
+
+Simulate a link with high latency, jitter, some packet loss, and a restricted MTU.
+
+```bash
+# Simulate a link with high latency, jitter, and slight packet loss, while limiting MTU
+wperf -c <server-ip> -t 10 --sim-latency 200 --sim-jitter 30 --sim-loss 1.5 --sim-mtu 1400
+```
 
 ## Output Explanation
 
@@ -263,6 +324,25 @@ UDP mode output example:
 Jitter: 2.345 ms
 Lost/Total: 15/10000 (0.15%)
 ----------------------------------------
+```
+
+### Sample Report Output (with Network Simulation)
+
+When network simulation is enabled, the final report will include a dedicated section to display the parameters and resulting statistics, such as packet loss.
+
+```
+... (Original report content) ...
+
+Simulation Parameters:
+  MTU: 1400 bytes
+  Latency: 200 ms
+  Jitter: 30 ms
+
+Packet Loss Simulation:
+  Configured Loss Rate: 1.50%
+  Total Packets Sent: 15231
+  Total Packets Lost: 228
+  Actual Loss Rate: 1.50%
 ```
 
 ### JSON Output Format
@@ -343,7 +423,9 @@ wperf supports two traceroute modes:
 
 1.  **Local Traceroute (`--traceroute`)**
     -   This is a standalone mode, similar to the system's `traceroute` or `tracert` command.
-    -   It uses raw sockets to send UDP probe packets with incrementing TTL (Time-To-Live).
+    -   It uses raw sockets to send probe packets with incrementing TTL (Time-To-Live).
+    -   Supports both **UDP** and **ICMP** probe protocols (set via `--tr-proto`).
+    -   Supports **parallel probing** (`--tr-parallel`) to send all probes simultaneously, speeding up the trace.
     -   Each hop router returns an ICMP "Time Exceeded" message when the TTL decrements to zero.
     -   wperf captures these ICMP messages, records the router's IP address and response time.
     -   This process requires administrator or root privileges to create raw sockets.
@@ -374,6 +456,21 @@ wperf cleverly solves this problem by utilizing the WebSocket protocol:
 2.  **No Port Forwarding Required**: As long as the server is accessible from the public network (e.g., deployed on a cloud server), any client behind NAT can actively initiate a connection without any port forwarding settings on the client side.
 
 This makes wperf an ideal tool for performance testing in home networks, enterprise internal networks, or any complex network topology.
+
+### Network Behavior Simulation
+
+The network behavior simulation features work at the **application layer** to mimic real-world network conditions without altering OS-level kernel parameters.
+
+- **MTU Simulation (`--sim-mtu`)**: At the sender side, `wperf` actively slices data into chunks that do not exceed the specified MTU size before sending them.
+- **Latency and Jitter Simulation (`--sim-latency`, `--sim-jitter`)**: At the sender side, before sending each packet, `wperf` introduces a delay using `asyncio.sleep()`. This delay is dynamically calculated from the fixed `latency` value plus a random value within the range of `[-jitter, +jitter]`.
+- **Packet Loss Simulation (`--sim-loss`)**:
+    - **Sequence Numbers**: To accurately track packets, `wperf` introduces a sequence number into its data protocol for each packet.
+    - **Sender-side Drop**: The sender generates a random number for each packet. If this number falls within the configured loss probability (e.g., `1.5%`), the packet (along with its sequence number) is simply not sent.
+    - **Receiver-side Detection**: The receiver inspects the sequence numbers of incoming packets. If it detects a gap (e.g., receiving packet 103 immediately after 101), it registers packet 102 as lost. The actual loss rate is then calculated based on the total count of lost packets.
+- **Buffer Simulation (`--sim-sndbuf`, `--sim-rcvbuf`)**: `wperf` uses a fixed-size internal buffer to simulate the constraints of TCP send/receive buffers.
+- **Nagle Algorithm Simulation (`--sim-tcp-nodelay`)**: `wperf` immediately sends small data chunks as they arrive, mimicking the effect of disabling the Nagle algorithm.
+
+**Important Note**: This is an application-level simulation designed to provide a reproducible, cross-platform performance reference. The results are not identical to true kernel parameter tuning but are highly valuable for understanding the performance impact of these network characteristics.
 
 ## Technical Details
 

@@ -12,14 +12,24 @@ wperf 是一个基于 WebSocket 的网络性能测试工具，其核心优势是
 - 🌐 **NAT 穿透** - 基于 WebSocket，可轻松穿透复杂的网络环境和防火墙。
 - 🚀 **TCP 带宽测试** - 测量上传和下载带宽
 - 🔄 **双向测试** - 同时进行上传和下载测试
+- ⏱️ **端到端延迟测试 (Ping)** - 测量基于 WebSocket 的往返时间 (RTT)
 - 📊 **UDP 模拟** - 测量抖动和丢包率
-- 📍 **路由追踪** - 支持本地和从服务器到客户端的反向路由追踪
+- 📍 **路由追踪** - 支持本地、反向、ICMP/UDP 探针及并行探测
 - 🌍 **GeoIP 信息** - 在路由追踪中显示每一跳的ASN和国家/地区信息
 - 🔒 **身份验证** - 支持 token 认证
 - 📈 **实时报告** - 定期输出测试进度
 - 🔢 **多连接并行** - 支持多个并行连接以提高测试准确性
 - 📄 **JSON 输出** - 支持机器可读的 JSON 格式输出
 - ⚡ **异步高性能** - 基于 asyncio 和 websockets 库
+- 🔬 **网络行为模拟** - 在应用层模拟 MTU、延迟、抖动、丢包、缓冲区和 Nagle 算法等网络特性。
+
+#### TODO List
+
+- [ ] 多服务器同时测试并生成统一的对比报告
+- [ ] 更真实地模拟丢包与 CWND (拥塞窗口) 行为
+- [ ] 模拟不同类型数据（如视频流、小数据包）的传输性能
+- [ ] More and more...
+
 
 ## 安装
 
@@ -41,7 +51,7 @@ cd wperf
 pip install websockets
 ```
 
-或使用 requirements.txt（如果提供）：
+或使用 requirements.txt：
 ```bash
 pip install -r requirements.txt
 ```
@@ -96,7 +106,21 @@ wperf -c <server-ip> -t 10
 | `-J, --json` | 以 JSON 格式输出结果 | false |
 | `--udp` | 模拟 UDP 流量并测量抖动/丢包 | false |
 | `-b, --bandwidth <mbps>` | 目标带宽（Mbps，用于 UDP 模式） | 1 |
+| `--ping` | **客户端专用**。运行一个端到端的延迟测试 (ping)。 | false |
+| `--ping-count <n>` | Ping 测试发送的数据包数量。 | 5 |
 
+
+### 网络行为模拟参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--sim-mtu <size>` | 模拟最大传输单元 (MTU)。 | 未启用 |
+| `--sim-latency <ms>` | 模拟固定的网络延迟。 | 0 |
+| `--sim-jitter <ms>` | 模拟网络抖动（延迟变化）。 | 0 |
+| `--sim-loss <rate>` | 模拟丢包率 (0-100)。 | 0 |
+| `--sim-tcp-nodelay` | 模拟禁用 Nagle 算法，让小数据包立即发送。 | 未启用 |
+| `--sim-sndbuf <size>` | 模拟 TCP 发送缓冲区的大小，并提供单位示例（如 `128K`, `1M`）。 | 未启用 |
+| `--sim-rcvbuf <size>` | 模拟 TCP 接收缓冲区的大小。 | 未启用 |
 #### 路由追踪参数
 
 > **注意**: 路由追踪功能需要管理员或 root 权限才能运行。
@@ -107,6 +131,8 @@ wperf -c <server-ip> -t 10
 | `--reverse-traceroute` | **客户端专用**。请求服务器对当前客户端进行反向路由追踪。必须与 `-c` 一起使用。 | false |
 | `--tr-max-hops <n>` | 路由追踪的最大跳数 | 30 |
 | `--tr-timeout <sec>` | 每一跳的超时时间（秒） | 1 |
+| `--tr-proto <proto>` | 路由追踪使用的探针协议 (`udp` 或 `icmp`)。 | `udp` |
+| `--tr-parallel` | 并行执行路由追踪探测以加快速度。 | false |
 
 ### 使用示例
 
@@ -213,7 +239,7 @@ wperf -c 192.168.1.100 -p 9000 -t 10
 
 ```bash
 # 需要管理员/root权限
-sudo wperf --traceroute google.com
+sudo wperf --traceroute google.com --tr-proto icmp --tr-parallel
 ```
 输出示例：
 ```
@@ -225,7 +251,26 @@ traceroute to google.com (142.250.199.14), 30 hops max
 12 [US, AS15169 GOOGLE]   142.250.199.14 (142.250.199.14) 15.432 ms
 ```
 
-#### 11. 反向路由追踪（服务器到客户端）
+#### 11. 端到端延迟测试 (Ping)
+
+测量客户端和服务器之间的往返延迟。
+
+```bash
+# 客户端
+wperf -c 192.168.1.100 --ping --ping-count 10
+```
+输出示例：
+```
+Pinging 192.168.1.100:8765...
+seq=0, rtt=12.34 ms
+seq=1, rtt=11.98 ms
+...
+--- statistics ---
+10 packets transmitted, 10 received, 0% packet loss
+rtt min/avg/max = 11.98/12.15/12.45 ms
+```
+
+#### 12. 反向路由追踪（服务器到客户端）
 
 诊断从服务器到客户端的网络路径。客户端连接到服务器并发起请求。
 
@@ -236,6 +281,22 @@ sudo wperf -c 192.168.1.100 --reverse-traceroute
 服务器将执行 traceroute 到该客户端的公网 IP，并将结果实时流式传输回客户端显示。
 
 ## 输出说明
+
+#### 13. 使用网络行为模拟
+
+```bash
+# 模拟小发送缓冲区和禁用的Nagle算法进行测试
+wperf -c <server-ip> -t 10 --sim-sndbuf 128K --sim-tcp-nodelay
+```
+
+#### 14. 综合网络模拟示例
+
+模拟一个高延迟、有抖动和轻微丢包的一般质量链路，并限制MTU。
+
+```bash
+# 模拟一个高延迟、有抖动和轻微丢包的一般质量链路，并限制MTU
+wperf -c <server-ip> -t 10 --sim-latency 200 --sim-jitter 30 --sim-loss 1.5 --sim-mtu 1400
+```
 
 ### TCP 测试输出
 
@@ -264,6 +325,25 @@ UDP 模式输出示例：
 Jitter: 2.345 ms
 Lost/Total: 15/10000 (0.15%)
 ----------------------------------------
+```
+
+### 测试报告样例（含网络模拟）
+
+当启用网络模拟参数时，最终的报告会包含一个专门的部分来展示这些参数和相关的统计数据，例如丢包情况。
+
+```
+... (原有报告内容) ...
+
+Simulation Parameters:
+  MTU: 1400 bytes
+  Latency: 200 ms
+  Jitter: 30 ms
+
+Packet Loss Simulation:
+  Configured Loss Rate: 1.50%
+  Total Packets Sent: 15231
+  Total Packets Lost: 228
+  Actual Loss Rate: 1.50%
 ```
 
 ### JSON 输出格式
@@ -344,7 +424,9 @@ wperf 支持两种路由追踪模式：
 
 1.  **本地路由追踪 (`--traceroute`)**
     -   这是一个独立的模式，类似于系统的 `traceroute` 或 `tracert` 命令。
-    -   它使用原始套接字（Raw Sockets）发送具有递增 TTL（Time-To-Live）的 UDP 探测包。
+    -   它使用原始套接字（Raw Sockets）发送具有递增 TTL（Time-To-Live）的探测包。
+    -   支持 **UDP** 和 **ICMP** 两种探针协议（通过 `--tr-proto` 设置）。
+    -   支持 **并行探测** (`--tr-parallel`)，可同时发送所有探测包以加快追踪速度。
     -   每一跳的路由器在 TTL 减为零时会返回一个 ICMP "Time Exceeded" 消息。
     -   wperf 捕获这些 ICMP 消息，记录下路由器的 IP 地址和响应时间。
     -   此过程需要管理员或 root 权限才能创建原始套接字。
@@ -382,7 +464,22 @@ wperf 通过利用 WebSocket 协议巧妙地解决了这个问题：
 
 - **asyncio**：Python 的异步 I/O 框架
 - **websockets**：WebSocket 客户端和服务器实现
-- **struct**：用于打包和解包二进制数据（UDP 模式）
+
+### 网络行为模拟原理
+
+此功能并非直接修改操作系统的 TCP 内核参数，而是在 **应用层** 通过内部的流量控制和缓冲策略来 **模拟** 这些行为。
+
+- **MTU 模拟 (`--sim-mtu`)**：在发送端，`wperf` 会将数据主动切片成不超过指定 MTU 大小的数据块再发送。
+- **延迟和抖动模拟 (`--sim-latency`, `--sim-jitter`)**：在发送端，`wperf` 在发送每个数据包之前，会通过 `asyncio.sleep()` 插入一个动态计算的延迟。该延迟由固定的 `latency` 和一个在 `[-jitter, +jitter]` 范围内的随机值组成。
+- **丢包模拟 (`--sim-loss`)**：
+    - **引入序列号**：为了准确追踪丢包，`wperf` 为每个（模拟的）数据包协议引入了序列号。
+    - **发送方丢弃**：在发送端，程序会根据配置的丢包率（如 `1.5%`）产生一个随机数。如果随机数落在丢包概率范围内，该数据包（连同其序列号）将不会被发送。
+    - **接收方检测**：在接收端，程序会检查收到的序列号是否连续。当检测到序列号不连续时（例如，收到 101 后直接收到了 103），就将 102 标记为丢失数据包。最终根据丢失的包总数计算出实际的丢包率。
+- **缓冲区模拟 (`--sim-sndbuf`, `--sim-rcvbuf`)**：`wperf` 内部维护一个固定大小的缓冲区来模拟 TCP 收发缓冲区的限制。
+- **Nagle 算法模拟 (`--sim-tcp-nodelay`)**：`wperf` 会在收到小数据块时立即发送，模拟禁用 Nagle 算法的效果。
+
+**重要提示**：这是一个应用层模拟，其目的是提供一个可复现的、跨平台的性能参考。其结果不完全等同于真实的内核参数调优，但具有很高的参考价值。
+- **struct**：用于打包和解包二进制数据（序列号、时间戳等）
 - **json**：JSON 数据序列化
 
 ### 数据块大小
