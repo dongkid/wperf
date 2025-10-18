@@ -1,0 +1,5 @@
+# Websockets库，用于建立WebSocket连接
+websockets>=12.0
+
+# Pyinstaller库，用于打包应用程序（可选）
+# pyinstaller
