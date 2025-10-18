@@ -8,8 +8,111 @@ import time
 import functools
 import json
 import struct
+import socket
+import os
+import sys
+import urllib.request
+import urllib.error
 
-async def server_handler(websocket, path, args):
+
+async def get_geoip_info(ip):
+    """获取IP地址的地理位置和ASN信息"""
+    if ip.startswith("192.168.") or ip.startswith("10.") or ip.startswith("172."):
+        return "", ""
+    try:
+        url = f"http://ip-api.com/json/{ip}?fields=countryCode,as"
+        with urllib.request.urlopen(url, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            return data.get('countryCode', ''), data.get('as', '')
+    except (urllib.error.URLError, socket.timeout, json.JSONDecodeError):
+        return "", ""
+
+async def run_traceroute(host, max_hops, timeout):
+    """
+    执行路由追踪。这是一个异步生成器，会为每一跳产出一个结果字典。
+    如果权限不足或设置失败，会引发异常。
+    """
+    # 检查管理员权限
+    try:
+        is_admin = os.getuid() == 0
+    except AttributeError:
+        import ctypes
+        is_admin = ctypes.windll.shell32.IsUserAnAdmin() != 0
+
+    if not is_admin:
+        raise PermissionError("路由追踪功能需要管理员或 root 权限才能运行。")
+
+    try:
+        dest_addr = socket.gethostbyname(host)
+    except socket.gaierror as e:
+        raise ValueError(f"无法解析主机名 '{host}': {e}") from e
+
+    # ICMP 协议号
+    icmp = socket.getprotobyname('icmp')
+    # UDP 协议号
+    udp = socket.getprotobyname('udp')
+
+    port = 33434  # Traceroute 使用的典型端口
+
+    for ttl in range(1, max_hops + 1):
+        hop_data = {"ttl": ttl, "ip": "*", "name": "*", "rtt": -1, "country": "", "asn": ""}
+        curr_addr = None
+        
+        # 创建接收和发送套接字
+        with socket.socket(socket.AF_INET, socket.SOCK_RAW, icmp) as recv_socket, \
+             socket.socket(socket.AF_INET, socket.SOCK_DGRAM, udp) as send_socket:
+            
+            recv_socket.settimeout(timeout)
+            send_socket.setsockopt(socket.IPPROTO_IP, socket.IP_TTL, ttl)
+
+            # 绑定接收套接字并执行探测 (平台特定)
+            try:
+                if sys.platform == "win32":
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                        s.connect((dest_addr, port))
+                        local_ip = s.getsockname()[0]
+                    recv_socket.bind((local_ip, 0))
+                    recv_socket.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+                else:
+                    recv_socket.bind(("", port))
+            except Exception as e:
+                raise IOError(f"套接字设置失败 (TTL={ttl}): {e}") from e
+
+            try:
+                start_time = time.time()
+                send_socket.sendto(b'', (dest_addr, port))
+                # 等待 ICMP 响应 (使用更大的缓冲区以容纳完整的IP包)
+                _, curr_addr_tuple = recv_socket.recvfrom(65535)
+                end_time = time.time()
+                curr_addr = curr_addr_tuple[0]
+                
+                hop_data["ip"] = curr_addr
+                hop_data["rtt"] = (end_time - start_time) * 1000
+                try:
+                    hop_data["name"] = socket.gethostbyaddr(curr_addr)[0]
+                except socket.herror:
+                    hop_data["name"] = curr_addr
+                
+                country, asn = await get_geoip_info(curr_addr)
+                hop_data["country"] = country
+                hop_data["asn"] = asn
+
+            except socket.timeout:
+                pass # ip remains '*'
+            finally:
+                if sys.platform == "win32":
+                    try:
+                        recv_socket.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
+                    except Exception:
+                        pass # Socket may already be closed or in a bad state
+        
+        yield hop_data
+
+        if curr_addr == dest_addr:
+            break
+
+
+async def server_handler(websocket, args):
     """处理单个客户端连接。"""
     print(f"Client connected from {websocket.remote_address}")
     
@@ -42,6 +145,26 @@ async def server_handler(websocket, path, args):
 
         initial_message = await websocket.recv()
 
+        # 首先尝试解析为JSON命令
+        try:
+            command_data = json.loads(initial_message)
+            if isinstance(command_data, dict) and command_data.get('command') == 'reverse_traceroute':
+                client_ip = websocket.remote_address[0]
+                print(f"Starting reverse traceroute for {client_ip}")
+                try:
+                    async for hop in run_traceroute(client_ip, args.tr_max_hops, args.tr_timeout):
+                        await websocket.send(json.dumps({"type": "hop", "data": hop}))
+                except (PermissionError, ValueError, IOError) as e:
+                    await websocket.send(json.dumps({"type": "error", "message": str(e)}))
+                except Exception as e:
+                    await websocket.send(json.dumps({"type": "error", "message": f"An unexpected error occurred: {e}"}))
+                finally:
+                    await websocket.send(json.dumps({"type": "end"}))
+                return # 完成反向路由追踪，结束处理器
+        except (json.JSONDecodeError, TypeError):
+            # 不是JSON命令，继续执行旧的逻辑
+            pass
+
         if initial_message == "BIDIR":
             print(f"Starting bidirectional test for {websocket.remote_address}")
             duration = args.time or 10 # Default to 10s if not specified
@@ -67,7 +190,7 @@ async def server_handler(websocket, path, args):
                         break
                     
                     now_ns = time.time_ns()
-                    seq, client_ts_ns = struct.unpack('!QL', message[:16])
+                    seq, client_ts_ns = struct.unpack('!QQ', message[:16])
                     total_packets += 1
 
                     if last_seq != -1 and seq > last_seq + 1:
@@ -115,8 +238,7 @@ async def server_handler(websocket, path, args):
 async def start_server(host, port, args):
     """启动wperf服务端"""
     print(f"Starting wperf server on {host}:{port}")
-    handler = functools.partial(server_handler, args=args)
-    async with websockets.serve(handler, host, port):
+    async with websockets.serve(lambda ws: server_handler(ws, args), host, port):
         await asyncio.Future()  # run forever
 
 async def reporter(start_time, stats, args):
@@ -292,7 +414,7 @@ async def client_worker(worker_id, uri, args, stats):
 
                 while time.time() - start_time < (args.time or 10):
                     client_ts_ns = time.time_ns()
-                    header = struct.pack('!QL', seq, client_ts_ns)
+                    header = struct.pack('!QQ', seq, client_ts_ns)
                     await websocket.send(header + payload)
                     stats['bytes_uploaded'][worker_id] += packet_size_bytes
                     seq += 1
@@ -314,8 +436,50 @@ async def client_worker(worker_id, uri, args, stats):
         print(f"Worker {worker_id} error: {e}")
 
 
+async def run_reverse_traceroute_client(uri, args):
+    """客户端执行反向路由追踪的逻辑"""
+    try:
+        async with websockets.connect(uri) as websocket:
+            print(f"Requesting reverse traceroute from server {args.client}...")
+            if args.token:
+                await websocket.send(args.token)
+            
+            await websocket.send(json.dumps({"command": "reverse_traceroute"}))
+            
+            client_ip = websocket.local_address[0]
+            try:
+                dest_addr = socket.gethostbyname(client_ip)
+                print(f"traceroute to {client_ip} ({dest_addr}), {args.tr_max_hops} hops max, from server {args.client}")
+            except Exception:
+                 print(f"Starting reverse traceroute to this client from server {args.client}...")
+
+            async for message in websocket:
+                data = json.loads(message)
+                if data['type'] == 'hop':
+                    hop = data['data']
+                    if hop.get('error'):
+                        print(f"Error at TTL {hop['ttl']}: {hop['error']}")
+                        break
+                    if hop['ip'] == '*':
+                        print(f"{hop['ttl']:<2} * * *")
+                    else:
+                        geo_info = f"[{hop['country']}, {hop['asn']}]" if hop['country'] and hop['asn'] else ""
+                        print(f"{hop['ttl']:<2} {geo_info:<25} {hop['name']} ({hop['ip']}) {hop['rtt']:.3f} ms")
+                elif data['type'] == 'end':
+                    break
+                elif data['type'] == 'error':
+                    print(f"Server error: {data['message']}")
+                    break
+    except Exception as e:
+        print(f"Connection error: {e}")
+
+
 async def start_client(uri, args):
     """启动wperf客户端并协调所有工作流"""
+    if args.reverse_traceroute:
+        await run_reverse_traceroute_client(uri, args)
+        return
+
     if not args.json:
         print(f"Connecting to wperf server at {uri}, running {args.parallel} parallel streams")
     
@@ -344,30 +508,91 @@ async def start_client(uri, args):
 
 def main():
     """主函数，解析命令行参数并启动相应的模式"""
-    parser = argparse.ArgumentParser(description="wperf: A simple network performance tool using WebSockets.")
     
-    # 服务端模式参数
-    parser.add_argument("-s", "--server", action="store_true", help="Run in server mode.")
+    # Dynamically determine the program name for help messages
+    is_frozen = getattr(sys, 'frozen', False)
+    if is_frozen:
+        prog_name = os.path.basename(sys.executable)
+        sudo_prefix = "sudo " if os.name != 'nt' else ''
+    else:
+        prog_name = f"python {sys.argv[0]}"
+        sudo_prefix = "sudo " if os.name != 'nt' else ''
+
+    epilog_text = f"""
+Examples:
+  # Run a server on port 9000
+  {prog_name} -s -p 9000
+
+  # Run a 10-second TCP upload test
+  {prog_name} -c <server_ip> -t 10
+
+  # Run a TCP download test transferring 100MB of data with 4 parallel streams
+  {prog_name} -c <server_ip> -n 100M -P 4 -R
+
+  # Run a 20-second bidirectional test
+  {prog_name} -c <server_ip> --bidir -t 20
+
+  # Run a UDP test with a target bandwidth of 5 Mbps for 15 seconds
+  {prog_name} -c <server_ip> --udp -b 5 -t 15
+
+  # Run a standalone traceroute (requires administrator/root privileges)
+  {sudo_prefix}{prog_name} --traceroute google.com
+  
+  # Request a reverse traceroute from the server (requires administrator/root privileges on client)
+  {sudo_prefix}{prog_name} -c <server_ip> --reverse-traceroute
+"""
+
+    parser = argparse.ArgumentParser(
+        description="wperf: A WebSocket-based network performance tool, similar to iperf3.",
+        epilog=epilog_text,
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+
+    # Mode selection
+    mode_group = parser.add_argument_group('Mode', 'Choose one of the operating modes. Only one mode can be selected.')
+    mode_exclusive_group = mode_group.add_mutually_exclusive_group()
+    mode_exclusive_group.add_argument("-s", "--server", action="store_true", help="Run in server mode, waiting for client connections.")
+    mode_exclusive_group.add_argument("-c", "--client", type=str, metavar='<host>', help="Run in client mode, connecting to the specified server.")
+    mode_exclusive_group.add_argument("--traceroute", type=str, metavar='<host>', help="Run in standalone traceroute mode. This does not connect to a wperf server.")
+
+    # General options
+    general_group = parser.add_argument_group('General Options', 'Parameters applicable to client, server, and traceroute modes')
+    general_group.add_argument("-p", "--port", type=int, default=8765, help="The port to listen on (server) or connect to (client). Default: 8765.")
+    general_group.add_argument("--token", type=str, help="Authentication token to secure the server. Must be the same on client and server.")
     
-    # 客户端模式参数
-    parser.add_argument("-c", "--client", type=str, help="Run in client mode, connecting to the specified server address.")
-    
-    # 通用参数
-    parser.add_argument("-p", "--port", type=int, default=8765, help="The port to listen on (server mode) or connect to (client mode).")
-    parser.add_argument("--token", type=str, help="Authentication token for the server.")
-    parser.add_argument("-i", "--interval", type=int, default=1, help="The interval in seconds to report bandwidth.")
-    parser.add_argument("-t", "--time", type=int, help="The total duration of the test in seconds (TCP mode).")
-    parser.add_argument("-n", "--bytes", type=str, help="Number of bytes to transmit (e.g., 10M, 1G).")
-    
-    # 客户端专用参数
-    parser.add_argument("-R", "--reverse", action="store_true", help="Reverse mode (server sends, client receives).")
-    parser.add_argument("--bidir", action="store_true", help="Bidirectional test (both send and receive).")
-    parser.add_argument("-P", "--parallel", type=int, default=1, help="Number of parallel client streams to run.")
-    parser.add_argument("-J", "--json", action="store_true", help="Output in JSON format.")
-    parser.add_argument("--udp", action="store_true", help="Simulate UDP traffic and measure jitter/loss.")
-    parser.add_argument("-b", "--bandwidth", type=float, default=1, help="Target bandwidth in Mbits/sec (for UDP mode).")
+    # Client test options
+    client_group = parser.add_argument_group('Client Test Options', 'Parameters for controlling client-side tests')
+    client_group.add_argument("-i", "--interval", type=int, default=1, metavar='<sec>', help="The interval in seconds between periodic bandwidth reports. Default: 1.")
+    client_group.add_argument("-t", "--time", type=int, metavar='<sec>', help="The duration of the test in seconds. Default is 10s for TCP/UDP tests. Incompatible with -n.")
+    client_group.add_argument("-n", "--bytes", type=str, metavar='<size>', help="Number of bytes to transmit (e.g., 10M, 1G). This overrides the --time option.")
+    client_group.add_argument("-R", "--reverse", action="store_true", help="Reverse mode (server sends, client receives). Tests download speed.")
+    client_group.add_argument("--bidir", action="store_true", help="Bidirectional test (both send and receive simultaneously).")
+    client_group.add_argument("-P", "--parallel", type=int, default=1, metavar='<n>', help="Number of parallel client streams to run to saturate the link. Default: 1.")
+    client_group.add_argument("-J", "--json", action="store_true", help="Output results in machine-readable JSON format.")
+    client_group.add_argument("--udp", action="store_true", help="Simulate UDP traffic to measure jitter and packet loss. Default is TCP.")
+    client_group.add_argument("-b", "--bandwidth", type=float, default=1, metavar='<mbps>', help="Target bandwidth in Mbits/sec for UDP tests. Default: 1 Mbps.")
+
+    # Traceroute options
+    traceroute_group = parser.add_argument_group('Traceroute Options', 'Parameters for traceroute modes (require admin/root privileges)')
+    traceroute_group.add_argument("--reverse-traceroute", action="store_true", help="Request a reverse traceroute from the server to this client. Must be used with -c.")
+    traceroute_group.add_argument("--tr-max-hops", type=int, default=30, metavar='<n>', help="Set the max number of hops (TTL) for traceroute. Default: 30.")
+    traceroute_group.add_argument("--tr-timeout", type=int, default=1, metavar='<sec>', help="Set the timeout in seconds for each traceroute hop. Default: 1.")
+
+    # If no arguments are provided, print help. For compiled executables, wait for user input.
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
+        # When running as a compiled executable (e.g., via PyInstaller),
+        # the console window may close immediately. This prevents that.
+        if getattr(sys, 'frozen', False):
+            input("\nPress Enter to exit...")
+        sys.exit(1)
 
     args = parser.parse_args()
+
+    # Validate modes and options
+    if not args.server and not args.client and not args.traceroute:
+        print("Error: You must specify a mode: -s, -c <host>, or --traceroute <host>", file=sys.stderr)
+        sys.exit(1)
 
     if args.bytes:
         args.time = None # -n overrides -t
@@ -381,25 +606,22 @@ def main():
                 args.bytes = int(size_str[:-1]) * 1024 * 1024 * 1024
             else:
                 args.bytes = int(size_str)
-        except ValueError:
-            print("Error: Invalid format for --bytes. Use a number with an optional K, M, or G suffix.")
-            return
-    elif not args.udp and not args.bidir:
-        args.bytes = None
-        if not args.time:
-            args.time = 10 # Default to 10 seconds if neither -t nor -n is given for TCP tests
-
-    if args.server and args.client:
-        print("Error: Cannot be both a server and a client.")
-        return
+        except (ValueError, TypeError):
+            print("Error: Invalid format for --bytes. Use a number with an optional K, M, or G suffix.", file=sys.stderr)
+            sys.exit(1)
     
-    if args.client and not args.time and not args.bytes and not args.udp:
-        print("Error: TCP test requires either --time or --bytes to be specified.")
-        return
+    # Set default test duration if not specified for client tests
+    if args.client and not args.reverse_traceroute:
+        if not args.bytes and not args.time:
+            args.time = 10
+    
+    if args.reverse_traceroute and not args.client:
+        print("Error: --reverse-traceroute must be used with -c <server_address>.", file=sys.stderr)
+        sys.exit(1)
     
     if args.reverse and args.bidir:
-        print("Error: Cannot use --reverse and --bidir at the same time.")
-        return
+        print("Error: Cannot use --reverse and --bidir at the same time.", file=sys.stderr)
+        sys.exit(1)
 
     if args.server:
         # 在服务端模式下，我们监听所有接口
@@ -408,9 +630,25 @@ def main():
     elif args.client:
         uri = f"ws://{args.client}:{args.port}"
         asyncio.run(start_client(uri, args))
-    else:
-        print("Error: You must specify either server (-s) or client (-c) mode.")
-        parser.print_help()
+    elif args.traceroute:
+        # 本地路由追踪现在也使用新的格式化逻辑
+        async def run_and_print_traceroute():
+            try:
+                dest_addr = socket.gethostbyname(args.traceroute)
+                print(f"traceroute to {args.traceroute} ({dest_addr}), {args.tr_max_hops} hops max")
+                async for hop in run_traceroute(args.traceroute, args.tr_max_hops, args.tr_timeout):
+                    if hop.get('error'):
+                        print(f"Error at TTL {hop['ttl']}: {hop['error']}")
+                        break
+                    if hop['ip'] == '*':
+                        print(f"{hop['ttl']:<2} * * *")
+                    else:
+                        geo_info = f"[{hop['country']}, {hop['asn']}]" if hop['country'] and hop['asn'] else ""
+                        print(f"{hop['ttl']:<2} {geo_info:<25} {hop['name']} ({hop['ip']}) {hop['rtt']:.3f} ms")
+            except (PermissionError, ValueError, IOError) as e:
+                print(f"Error: {e}")
+
+        asyncio.run(run_and_print_traceroute())
 
 if __name__ == "__main__":
     main()

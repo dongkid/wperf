@@ -1,6 +1,6 @@
 # wperf - WebSocket 网络性能测试工具
 
-[![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[English Version](README_en.md) | [![Python](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 wperf 是一个基于 WebSocket 的网络性能测试工具，其核心优势是能够轻松穿透 NAT 和防火墙环境。它类似于 iperf3，用于测量网络带宽、延迟、抖动和丢包率。
@@ -11,6 +11,8 @@ wperf 是一个基于 WebSocket 的网络性能测试工具，其核心优势是
 - 🚀 **TCP 带宽测试** - 测量上传和下载带宽
 - 🔄 **双向测试** - 同时进行上传和下载测试
 - 📊 **UDP 模拟** - 测量抖动和丢包率
+- 📍 **路由追踪** - 支持本地和从服务器到客户端的反向路由追踪
+- 🌍 **GeoIP 信息** - 在路由追踪中显示每一跳的ASN和国家/地区信息
 - 🔒 **身份验证** - 支持 token 认证
 - 📈 **实时报告** - 定期输出测试进度
 - 🔢 **多连接并行** - 支持多个并行连接以提高测试准确性
@@ -49,13 +51,13 @@ pip install -r requirements.txt
 在服务器上运行：
 
 ```bash
-python wperf.py -s
+wperf -s
 ```
 
 默认监听端口 8765，可以使用 `-p` 参数指定其他端口：
 
 ```bash
-python wperf.py -s -p 9000
+wperf -s -p 9000
 ```
 
 ### 运行客户端测试
@@ -63,7 +65,7 @@ python wperf.py -s -p 9000
 在客户端上运行基本的上传测试：
 
 ```bash
-python wperf.py -c <server-ip> -t 10
+wperf -c <server-ip> -t 10
 ```
 
 ## 使用说明
@@ -93,7 +95,21 @@ python wperf.py -c <server-ip> -t 10
 | `--udp` | 模拟 UDP 流量并测量抖动/丢包 | false |
 | `-b, --bandwidth <mbps>` | 目标带宽（Mbps，用于 UDP 模式） | 1 |
 
+#### 路由追踪参数
+
+> **注意**: 路由追踪功能需要管理员或 root 权限才能运行。
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--traceroute <host>` | 以独立的路由追踪模式运行，追踪到指定主机 | - |
+| `--reverse-traceroute` | **客户端专用**。请求服务器对当前客户端进行反向路由追踪。必须与 `-c` 一起使用。 | false |
+| `--tr-max-hops <n>` | 路由追踪的最大跳数 | 30 |
+| `--tr-timeout <sec>` | 每一跳的超时时间（秒） | 1 |
+
 ### 使用示例
+
+> **注意**：以下示例统一使用 `wperf` 作为命令名。如果您直接运行 Python 脚本，请将其替换为 `wperf`。如果您使用的是编译后的可执行文件，请使用相应的可执行文件名（例如 `wperf` 或 `wperf.exe`）。
+
 
 #### 1. TCP 上传测试（客户端到服务器）
 
@@ -101,10 +117,10 @@ python wperf.py -c <server-ip> -t 10
 
 ```bash
 # 服务端
-python wperf.py -s
+wperf -s
 
 # 客户端
-python wperf.py -c 192.168.1.100 -t 10
+wperf -c 192.168.1.100 -t 10
 ```
 
 #### 2. TCP 下载测试（服务器到客户端）
@@ -113,7 +129,7 @@ python wperf.py -c 192.168.1.100 -t 10
 
 ```bash
 # 客户端
-python wperf.py -c 192.168.1.100 -t 10 -R
+wperf -c 192.168.1.100 -t 10 -R
 ```
 
 #### 3. 双向测试
@@ -122,7 +138,7 @@ python wperf.py -c 192.168.1.100 -t 10 -R
 
 ```bash
 # 客户端
-python wperf.py -c 192.168.1.100 -t 10 --bidir
+wperf -c 192.168.1.100 -t 10 --bidir
 ```
 
 #### 4. UDP 模拟测试
@@ -131,7 +147,7 @@ python wperf.py -c 192.168.1.100 -t 10 --bidir
 
 ```bash
 # 客户端
-python wperf.py -c 192.168.1.100 -t 10 --udp -b 10
+wperf -c 192.168.1.100 -t 10 --udp -b 10
 ```
 
 此命令将以 10 Mbps 的目标带宽发送模拟 UDP 数据包。
@@ -142,7 +158,7 @@ python wperf.py -c 192.168.1.100 -t 10 --udp -b 10
 
 ```bash
 # 客户端
-python wperf.py -c 192.168.1.100 -t 10 -P 4
+wperf -c 192.168.1.100 -t 10 -P 4
 ```
 
 #### 6. 传输指定字节数
@@ -151,7 +167,7 @@ python wperf.py -c 192.168.1.100 -t 10 -P 4
 
 ```bash
 # 客户端
-python wperf.py -c 192.168.1.100 -n 100M
+wperf -c 192.168.1.100 -n 100M
 ```
 
 支持的单位：K（千字节）、M（兆字节）、G（千兆字节）
@@ -162,7 +178,7 @@ python wperf.py -c 192.168.1.100 -n 100M
 
 ```bash
 # 客户端
-python wperf.py -c 192.168.1.100 -t 10 -J
+wperf -c 192.168.1.100 -t 10 -J
 ```
 
 #### 8. 使用身份验证
@@ -171,10 +187,10 @@ python wperf.py -c 192.168.1.100 -t 10 -J
 
 ```bash
 # 服务端
-python wperf.py -s --token mySecretToken
+wperf -s --token mySecretToken
 
 # 客户端
-python wperf.py -c 192.168.1.100 -t 10 --token mySecretToken
+wperf -c 192.168.1.100 -t 10 --token mySecretToken
 ```
 
 #### 9. 自定义端口
@@ -183,11 +199,39 @@ python wperf.py -c 192.168.1.100 -t 10 --token mySecretToken
 
 ```bash
 # 服务端
-python wperf.py -s -p 9000
+wperf -s -p 9000
 
 # 客户端
-python wperf.py -c 192.168.1.100 -p 9000 -t 10
+wperf -c 192.168.1.100 -p 9000 -t 10
 ```
+
+#### 10. 本地路由追踪
+
+追踪到 `google.com` 的网络路径。此模式独立运行，不需要连接到 `wperf` 服务器。
+
+```bash
+# 需要管理员/root权限
+sudo wperf --traceroute google.com
+```
+输出示例：
+```
+traceroute to google.com (142.250.199.14), 30 hops max
+1  [US, AS15169 GOOGLE]    192.168.1.1 (192.168.1.1) 1.234 ms
+2  * * *
+3  [US, AS7922 COMCAST]   some.router.com (96.120.88.193) 9.876 ms
+...
+12 [US, AS15169 GOOGLE]   142.250.199.14 (142.250.199.14) 15.432 ms
+```
+
+#### 11. 反向路由追踪（服务器到客户端）
+
+诊断从服务器到客户端的网络路径。客户端连接到服务器并发起请求。
+
+```bash
+# 客户端 (需要管理员/root权限)
+sudo wperf -c 192.168.1.100 --reverse-traceroute
+```
+服务器将执行 traceroute 到该客户端的公网 IP，并将结果实时流式传输回客户端显示。
 
 ## 输出说明
 
@@ -271,6 +315,7 @@ wperf 使用 WebSocket 协议进行双向通信，基于以下设计：
    - **REVERSE**：服务器发送数据到客户端
    - **BIDIR**：双向同时传输
    - **UDP**：模拟 UDP 数据包传输
+   - **REVERSE_TRACEROUTE**：客户端请求，服务器执行反向路由追踪
 
 ### TCP 测试流程
 
@@ -290,6 +335,25 @@ wperf 使用 WebSocket 协议进行双向通信，基于以下设计：
    - **抖动（Jitter）**：使用 RFC 1889 的算法计算
    - **丢包率**：基于序列号检测丢失的数据包
 4. 测试结束后，服务器返回统计报告
+
+### 路由追踪流程
+
+wperf 支持两种路由追踪模式：
+
+1.  **本地路由追踪 (`--traceroute`)**
+    -   这是一个独立的模式，类似于系统的 `traceroute` 或 `tracert` 命令。
+    -   它使用原始套接字（Raw Sockets）发送具有递增 TTL（Time-To-Live）的 UDP 探测包。
+    -   每一跳的路由器在 TTL 减为零时会返回一个 ICMP "Time Exceeded" 消息。
+    -   wperf 捕获这些 ICMP 消息，记录下路由器的 IP 地址和响应时间。
+    -   此过程需要管理员或 root 权限才能创建原始套接字。
+
+2.  **反向路由追踪 (`--reverse-traceroute`)**
+    -   这是一个客户端-服务器协作的功能，用于诊断从服务器到客户端的网络路径。
+    -   客户端通过 WebSocket 连接向服务器发送一个 `reverse_traceroute` 命令。
+    -   服务器收到命令后，从 WebSocket 连接中获取客户端的公网 IP 地址。
+    -   服务器随后以该客户端 IP 为目标，执行与本地路由追踪相同的探测流程。
+    -   服务器将每一跳的结果（IP、延迟、GeoIP等）通过 WebSocket 实时流式传输回客户端。
+    -   客户端接收并格式化显示这些结果，提供一种“从远端看自己”的网络路径视图。
 
 ### 并行连接
 
@@ -386,7 +450,7 @@ J(i) = J(i-1) + (|D(i-1,i)| - J(i-1))/16
 
 ## 作者
 
-wperf 网络性能测试工具
+[dongkid](https://github.com/dongkid)
 
 ## 致谢
 
